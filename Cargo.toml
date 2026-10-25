@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["shared", "frontend", "src-tauri"]
+default-members = ["src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Jean-Jacques Serpoul <serpoul@gmail.com>"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rustscanner-shared = { path = "shared" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+[profile.release.package.rustscanner-ui]
+opt-level = "z"
+
+# le traitement d'image reste rapide en mode développement
+[profile.dev.package."*"]
+opt-level = 2

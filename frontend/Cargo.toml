@@ -1,0 +1,25 @@
+[package]
+name = "rustscanner-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustscanner-shared.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+leptos = { version = "0.8.22", features = ["csr"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "HtmlImageElement",
+  "DomRect", "MouseEvent", "PointerEvent", "KeyboardEvent", "WheelEvent", "DragEvent", "DataTransfer",
+  "Event", "EventTarget", "Storage", "console", "Navigator", "ResizeObserver", "ResizeObserverEntry", "Node", "DomTokenList", "Location", "CssStyleDeclaration",
+  "ScrollIntoViewOptions", "ScrollLogicalPosition", "ScrollBehavior",
+]
