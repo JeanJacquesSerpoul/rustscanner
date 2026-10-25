@@ -99,6 +99,24 @@ cargo tauri build
 
 `src-tauri/tauri.windows.conf.json` completes the configuration on Windows: the (bilingual) NSIS installer lands in `target\release\bundle\nsis\`, the MSI packages (one per language) in `target\release\bundle\msi\`. Tauri downloads the NSIS and WiX tools on the first build.
 
+## Supported scanners
+
+**On Linux**, RustScanner works with every scanner SANE supports, which covers the vast majority of USB and network models (Canon, Epson, HP, Brother…); for recent network scanners (eSCL / AirScan), install `sane-airscan`. Nothing in the code is specific to a model.
+
+**On Windows**, it works with any scanner that ships a WIA driver, which is the case for nearly all consumer scanners and multifunction printers, as well as network scanners added in Windows settings. A few limits:
+
+- **Scanners without a WIA driver**: some professional scanners only have a TWAIN driver, which RustScanner does not support, and Fujitsu ScanSnap models only work with their own software. These models do not show up in the list.
+- **Feeder and duplex**: supported by the code, but not yet tried on a real scanner (only the flatbed of a Canon MG3600 has been).
+- **Uneven drivers**: each manufacturer reads WIA its own way (the Canon driver, for instance, cropped the area depending on the order of the settings). Secondary settings are therefore applied on a best-effort basis: a setting the driver rejects is skipped instead of blocking the scan. With a very unusual driver, the resulting area or resolution may differ slightly from what was requested.
+
+To check another model on Windows, plug it in and run the real-hardware test; it lists the scanner's options, takes a preview and scans an area in black and white:
+
+```powershell
+cargo test -p rustscanner --test wia_backend -- --include-ignored --nocapture
+```
+
+If a model misbehaves, attach this test's output to the report.
+
 ## Build and run
 
 ```bash

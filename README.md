@@ -99,6 +99,24 @@ cargo tauri build
 
 `src-tauri/tauri.windows.conf.json` complète la configuration sous Windows : l'installeur NSIS (bilingue) est produit dans `target\release\bundle\nsis\`, les MSI (un par langue) dans `target\release\bundle\msi\`. Les outils NSIS et WiX sont téléchargés par Tauri à la première construction.
 
+## Scanners compatibles
+
+**Sous Linux**, RustScanner fonctionne avec tous les scanners pris en charge par SANE, soit la grande majorité des modèles USB et réseau (Canon, Epson, HP, Brother…) ; pour les scanners réseau récents (eSCL / AirScan), installez `sane-airscan`. Le code ne contient rien de propre à un modèle.
+
+**Sous Windows**, il fonctionne avec tout scanner doté d'un pilote WIA, ce qui est le cas de presque tous les scanners grand public et des imprimantes multifonctions, ainsi que des scanners réseau ajoutés dans les paramètres de Windows. Quelques limites :
+
+- **Scanners sans pilote WIA** : certains scanners professionnels n'ont qu'un pilote TWAIN, que RustScanner ne gère pas, et les Fujitsu ScanSnap ne passent que par leur propre logiciel. Ces modèles n'apparaissent pas dans la liste.
+- **Chargeur et recto-verso** : pris en charge par le code, mais pas encore essayés sur un vrai scanner (seule la vitre d'un Canon MG3600 l'a été).
+- **Pilotes inégaux** : chaque fabricant interprète WIA à sa façon (le pilote Canon rognait par exemple la zone selon l'ordre des réglages). Les réglages secondaires sont donc appliqués au mieux : un réglage refusé par le pilote est ignoré au lieu de bloquer la numérisation. Avec un pilote très particulier, la zone ou la résolution obtenues peuvent légèrement différer de celles demandées.
+
+Pour vérifier un autre modèle sous Windows, branchez-le et lancez le test sur matériel réel ; il liste les options du scanner, fait un aperçu et numérise une zone en noir et blanc :
+
+```powershell
+cargo test -p rustscanner --test wia_backend -- --include-ignored --nocapture
+```
+
+Si un modèle pose problème, joignez la sortie de ce test au signalement.
+
 ## Compilation et lancement
 
 ```bash
