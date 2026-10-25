@@ -5,11 +5,16 @@
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr;
+use std::sync::Arc;
+use std::time::Instant;
 
+use image::DynamicImage;
 use libloading::Library;
 use rustscanner_shared::{Constraint, DeviceInfo, OptKind, OptUnit, OptValue, ScanOption};
 
 use crate::error::{Error, Result};
+use crate::frames::{Frame, assemble};
+use crate::scanner::Sink;
 
 /// Scanner ouvert (pointeur opaque de SANE).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -21,9 +26,7 @@ unsafe impl Send for Handle {}
 type Word = c_int;
 
 const STATUS_GOOD: Word = 0;
-pub const STATUS_CANCELLED: Word = 2;
 pub const STATUS_EOF: Word = 5;
-pub const STATUS_NO_DOCS: Word = 7;
 
 const TYPE_BOOL: Word = 0;
 const TYPE_INT: Word = 1;
@@ -417,6 +420,70 @@ impl Sane {
 
     pub fn cancel(&self, h: Handle) {
         unsafe { (self.api.cancel)(h.0) }
+    }
+
+    /// Numérise une page, ou une série depuis le chargeur jusqu'à ce qu'il soit vide.
+    pub fn scan(&self, h: Handle, feeder: bool, sink: &Arc<Sink>) -> Result<()> {
+        loop {
+            if sink.cancelled() {
+                return Err(Error::cancelled());
+            }
+            sink.started();
+            let (image, bilevel) = self.acquire(h, sink)?;
+            sink.page(image, bilevel);
+            if !feeder {
+                return Ok(());
+            }
+        }
+    }
+
+    fn acquire(&self, h: Handle, sink: &Sink) -> Result<(DynamicImage, bool)> {
+        let mut frames = Vec::new();
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut last_report = Instant::now();
+        loop {
+            self.check(self.start(h))?;
+            let params = self.parameters(h)?;
+            // trois passes : la progression couvre l'ensemble des trames
+            let passes = if params.format >= FRAME_RED { 3.0 } else { 1.0 };
+            let done_before = frames.len() as f64;
+            let expected = if params.lines > 0 {
+                params.bytes_per_line as usize * params.lines as usize
+            } else {
+                0
+            };
+            let mut data = Vec::with_capacity(expected);
+            loop {
+                if sink.cancelled() {
+                    return Err(Error::cancelled());
+                }
+                let n = self.read(h, &mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                if last_report.elapsed().as_millis() >= 80 {
+                    last_report = Instant::now();
+                    let fraction = if expected > 0 {
+                        ((done_before + data.len() as f64 / expected as f64) / passes).min(1.0)
+                    } else {
+                        -1.0
+                    };
+                    sink.progress(fraction);
+                }
+            }
+            // certains backends terminent la trame (EOF) au lieu de signaler l'annulation
+            if sink.cancelled() {
+                return Err(Error::cancelled());
+            }
+            let last = params.last_frame != 0;
+            frames.push(Frame { params, data });
+            if last {
+                break;
+            }
+        }
+        sink.progress(1.0);
+        assemble(&frames)
     }
 }
 

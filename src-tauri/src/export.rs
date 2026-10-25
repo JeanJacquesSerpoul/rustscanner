@@ -1,9 +1,10 @@
 //! Enregistrement du document : PDF (une image par page, à la taille réelle)
-//! ou images séparées ; impression par CUPS.
+//! ou images séparées ; impression par CUPS (par GDI sous Windows, voir `winprint.rs`).
 
 use std::fs;
 use std::io::{BufWriter, Cursor, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Command;
 
 use flate2::Compression;
@@ -11,7 +12,9 @@ use flate2::write::ZlibEncoder;
 use image::codecs::jpeg::{JpegEncoder, PixelDensity};
 use image::codecs::webp::WebPEncoder;
 use image::{DynamicImage, ImageFormat};
-use rustscanner_shared::{ExportFormat, PageInfo, Printer};
+#[cfg(not(windows))]
+use rustscanner_shared::Printer;
+use rustscanner_shared::{ExportFormat, PageInfo};
 
 use crate::error::{Error, Result};
 
@@ -279,7 +282,26 @@ pub fn write_pdf(sources: &[Source], path: &Path, quality: u8, progress: &dyn Fn
     Ok(())
 }
 
+#[cfg(windows)]
+pub use crate::winprint::{printers, printing_available};
+
+/// Imprime les pages : PDF temporaire (dans `dir`) envoyé à CUPS, ou GDI sous Windows.
+pub fn print_pages(sources: &[Source], dir: &Path, printer: &str, copies: u32) -> Result<String> {
+    #[cfg(windows)]
+    {
+        let _ = dir;
+        crate::winprint::print(sources, printer, copies)
+    }
+    #[cfg(not(windows))]
+    {
+        let pdf = dir.join("print.pdf");
+        write_pdf(sources, &pdf, 90, &|_, _| {})?;
+        print(&pdf, printer, copies)
+    }
+}
+
 /// Imprimantes CUPS (`lpstat`).
+#[cfg(not(windows))]
 pub fn printers() -> Vec<Printer> {
     let default = Command::new("lpstat")
         .arg("-d")
@@ -303,11 +325,13 @@ pub fn printers() -> Vec<Printer> {
         .collect()
 }
 
+#[cfg(not(windows))]
 pub fn printing_available() -> bool {
     Command::new("lp").arg("--help").output().is_ok()
 }
 
 /// Envoie un PDF à l'imprimante.
+#[cfg(not(windows))]
 pub fn print(pdf: &Path, printer: &str, copies: u32) -> Result<String> {
     let mut cmd = Command::new("lp");
     if !printer.is_empty() {

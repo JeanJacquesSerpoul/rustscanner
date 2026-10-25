@@ -1,19 +1,26 @@
-//! Fil dédié au scanner : tous les appels SANE (sauf l'annulation) y sont
+//! Fil dédié au scanner : tous les appels au backend (sauf l'annulation) y sont
 //! sérialisés ; les commandes arrivent par un canal et répondent par `oneshot`.
+//!
+//! Le backend est SANE (Linux, macOS) ou WIA (Windows) ; tous deux présentent
+//! les options sous les noms normalisés par SANE.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Instant;
 
 use image::DynamicImage;
 use rustscanner_shared::{Area, Constraint, DeviceInfo, OptKind, OptUnit, OptValue, ScanEvent, ScanOption, i18n, is_feeder, names};
 use tokio::sync::oneshot;
 
 use crate::error::{Error, Result};
-use crate::frames::{Frame, assemble};
 use crate::gettext::Catalog;
-use crate::sane::{self, Handle, Sane};
+#[cfg(not(windows))]
+use crate::sane::{Handle, Sane as Backend};
+#[cfg(windows)]
+use crate::wia::{Handle, Wia as Backend};
+
+/// Nom du backend affiché dans l'interface.
+pub const BACKEND: &str = if cfg!(windows) { "WIA" } else { "SANE" };
 
 type Reply<T> = oneshot::Sender<Result<T>>;
 
@@ -49,9 +56,58 @@ struct Cancel {
     requested: AtomicBool,
 }
 
+/// Numérisation en cours, vue du backend : événements à transmettre (depuis
+/// n'importe quel fil) et demande d'annulation.
+pub struct Sink {
+    out: mpsc::Sender<Output>,
+    cancel: Arc<Cancel>,
+    preview: bool,
+    dpi: f64,
+    pages: AtomicU32,
+}
+
+impl Sink {
+    pub fn cancelled(&self) -> bool {
+        self.cancel.requested.load(Ordering::SeqCst)
+    }
+
+    fn current(&self) -> u32 {
+        self.pages.load(Ordering::SeqCst) + 1
+    }
+
+    /// Début de la page suivante.
+    pub fn started(&self) {
+        let _ = self.out.send(Output::Event(ScanEvent::Started {
+            page: self.current(),
+            preview: self.preview,
+        }));
+    }
+
+    /// Avancement de la page en cours (0 – 1 ; négatif si inconnu).
+    pub fn progress(&self, fraction: f64) {
+        let page = self.current();
+        let _ = self.out.send(Output::Event(ScanEvent::Progress { page, fraction }));
+    }
+
+    /// Page terminée.
+    pub fn page(&self, image: DynamicImage, bilevel: bool) {
+        self.pages.fetch_add(1, Ordering::SeqCst);
+        let _ = self.out.send(Output::Image {
+            image,
+            dpi: self.dpi,
+            bilevel,
+            preview: self.preview,
+        });
+    }
+
+    pub fn pages(&self) -> u32 {
+        self.pages.load(Ordering::SeqCst)
+    }
+}
+
 pub struct Scanner {
     tx: mpsc::Sender<Job>,
-    sane: Option<Arc<Sane>>,
+    backend: Option<Arc<Backend>>,
     cancel: Arc<Cancel>,
     pub load_error: Option<String>,
 }
@@ -60,35 +116,35 @@ impl Scanner {
     pub fn start() -> Scanner {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(Cancel::default());
-        let (sane, load_error) = match Sane::load() {
-            Ok(s) => (Some(Arc::new(s)), None),
+        let (backend, load_error) = match Backend::load() {
+            Ok(b) => (Some(Arc::new(b)), None),
             Err(e) => (None, Some(e.to_string())),
         };
-        if let Some(sane) = sane.clone() {
+        if let Some(backend) = backend.clone() {
             let cancel = cancel.clone();
             std::thread::Builder::new()
                 .name("scanner".into())
-                .spawn(move || Worker::new(sane, cancel).run(rx))
+                .spawn(move || Worker::new(backend, cancel).run(rx))
                 .expect("fil du scanner");
         }
         Scanner {
             tx,
-            sane,
+            backend,
             cancel,
             load_error,
         }
     }
 
     pub fn available(&self) -> bool {
-        self.sane.is_some()
+        self.backend.is_some()
     }
 
     pub fn version(&self) -> String {
-        self.sane.as_ref().map(|s| s.version.clone()).unwrap_or_default()
+        self.backend.as_ref().map(|s| s.version.clone()).unwrap_or_default()
     }
 
     async fn ask<T>(&self, make: impl FnOnce(Reply<T>) -> Job) -> Result<T> {
-        if self.sane.is_none() {
+        if self.backend.is_none() {
             return Err(Error::NoSane(self.load_error.clone().unwrap_or_default()));
         }
         let (tx, rx) = oneshot::channel();
@@ -132,10 +188,10 @@ impl Scanner {
     pub fn cancel(&self) {
         self.cancel.requested.store(true, Ordering::SeqCst);
         let h = self.cancel.handle.load(Ordering::SeqCst);
-        if let Some(sane) = &self.sane
+        if let Some(backend) = &self.backend
             && !h.is_null()
         {
-            sane.cancel(Handle(h));
+            backend.cancel(Handle(h));
         }
     }
 
@@ -145,16 +201,16 @@ impl Scanner {
 }
 
 struct Worker {
-    sane: Arc<Sane>,
+    backend: Arc<Backend>,
     cancel: Arc<Cancel>,
     handle: Option<Handle>,
     catalog: Option<(i18n::Lang, Catalog)>,
 }
 
 impl Worker {
-    fn new(sane: Arc<Sane>, cancel: Arc<Cancel>) -> Worker {
+    fn new(backend: Arc<Backend>, cancel: Arc<Cancel>) -> Worker {
         Worker {
-            sane,
+            backend,
             cancel,
             handle: None,
             catalog: None,
@@ -165,7 +221,7 @@ impl Worker {
         while let Ok(job) = rx.recv() {
             match job {
                 Job::Devices { local_only, reply } => {
-                    let _ = reply.send(self.sane.devices(local_only));
+                    let _ = reply.send(self.backend.devices(local_only));
                 }
                 Job::Open { name, saved, reply } => {
                     let _ = reply.send(self.open(&name, &saved));
@@ -203,13 +259,13 @@ impl Worker {
 
     fn close(&mut self) {
         if let Some(h) = self.handle.take() {
-            self.sane.close(h);
+            self.backend.close(h);
         }
     }
 
     fn open(&mut self, name: &str, saved: &[(String, OptValue)]) -> Result<Vec<ScanOption>> {
         self.close();
-        let h = self.sane.open(name)?;
+        let h = self.backend.open(name)?;
         self.handle = Some(h);
         if !saved.is_empty() {
             // deux passes : certaines options n'apparaissent qu'après d'autres (mode → profondeur)
@@ -221,7 +277,7 @@ impl Worker {
                         && opt.settable
                         && opt.value.as_ref() != Some(v)
                     {
-                        let _ = self.sane.set_value(h, opt.index, v);
+                        let _ = self.backend.set_value(h, opt.index, v);
                     }
                 }
             }
@@ -236,7 +292,7 @@ impl Worker {
             self.catalog = Some((lang, c));
         }
         let catalog = &self.catalog.as_ref().unwrap().1;
-        self.sane.options(h, &|s| catalog.translate(s))
+        self.backend.options(h, &|s| catalog.translate(s))
     }
 
     fn find(&mut self, h: Handle, name: &str) -> Option<ScanOption> {
@@ -247,8 +303,8 @@ impl Worker {
         let h = self.handle()?;
         let opt = self.find(h, name).ok_or_else(|| Error::Other(format!("option « {name} » inconnue")))?;
         match value {
-            Some(v) => self.sane.set_value(h, opt.index, &coerce(&opt, v))?,
-            None => self.sane.set_auto(h, opt.index)?,
+            Some(v) => self.backend.set_value(h, opt.index, &coerce(&opt, v))?,
+            None => self.backend.set_auto(h, opt.index)?,
         };
         Ok(self.options(h))
     }
@@ -268,7 +324,7 @@ impl Worker {
                 && opt.active
             {
                 let v = if opt.unit == OptUnit::Pixel { mm / 25.4 * res } else { mm };
-                self.sane.set_value(h, opt.index, &coerce(&opt, &OptValue::Number(v)))?;
+                self.backend.set_value(h, opt.index, &coerce(&opt, &OptValue::Number(v)))?;
             }
         }
         Ok(self.options(h))
@@ -289,7 +345,7 @@ impl Worker {
         let opts = self.options(h);
         let mut set = |opt: &ScanOption, v: OptValue| {
             if opt.active && opt.settable && let Some(old) = &opt.value && *old != v
-                && self.sane.set_value(h, opt.index, &v).is_ok()
+                && self.backend.set_value(h, opt.index, &v).is_ok()
             {
                 restore.push((opt.index, old.clone()));
             }
@@ -314,106 +370,33 @@ impl Worker {
             .and_then(|o| o.value.and_then(|v| v.as_str().map(str::to_string)))
             .unwrap_or_default();
         let feeder = !preview && is_feeder(&source);
-        let dpi = self.resolution(h);
-        let mut pages = 0u32;
+        let sink = Arc::new(Sink {
+            out: out.clone(),
+            cancel: self.cancel.clone(),
+            preview,
+            dpi: self.resolution(h),
+            pages: AtomicU32::new(0),
+        });
         let mut cancelled = false;
         let mut error = None;
-        loop {
-            if self.cancel.requested.load(Ordering::SeqCst) {
-                cancelled = true;
-                break;
-            }
-            let page = pages + 1;
-            let _ = out.send(Output::Event(ScanEvent::Started { page, preview }));
-            match self.acquire(h, page, out) {
-                Ok((image, bilevel)) => {
-                    pages += 1;
-                    let _ = out.send(Output::Image {
-                        image,
-                        dpi,
-                        bilevel,
-                        preview,
-                    });
-                }
-                Err(e) => {
-                    match e.kind() {
-                        "cancelled" => cancelled = true,
-                        // chargeur vide après au moins une page : fin normale de la série
-                        "no-docs" if pages > 0 => {}
-                        _ => error = Some(e.user_message()),
-                    }
-                    break;
-                }
-            }
-            if !feeder {
-                break;
+        if let Err(e) = self.backend.scan(h, feeder, &sink) {
+            match e.kind() {
+                "cancelled" => cancelled = true,
+                // chargeur vide après au moins une page : fin normale de la série
+                "no-docs" if sink.pages() > 0 => {}
+                _ => error = Some(e.user_message()),
             }
         }
-        self.sane.cancel(h);
+        self.backend.cancel(h);
         self.cancel.handle.store(std::ptr::null_mut(), Ordering::SeqCst);
         for (index, v) in restore {
-            let _ = self.sane.set_value(h, index, &v);
+            let _ = self.backend.set_value(h, index, &v);
         }
         let _ = out.send(Output::Done {
-            pages,
+            pages: sink.pages(),
             cancelled,
             error,
         });
-    }
-
-    fn acquire(&mut self, h: Handle, page: u32, out: &mpsc::Sender<Output>) -> Result<(DynamicImage, bool)> {
-        let mut frames = Vec::new();
-        let mut buf = vec![0u8; 256 * 1024];
-        let mut last_report = Instant::now();
-        loop {
-            self.sane.check(self.sane.start(h))?;
-            let params = self.sane.parameters(h)?;
-            // trois passes : la progression couvre l'ensemble des trames
-            let passes = if params.format >= sane::FRAME_RED { 3.0 } else { 1.0 };
-            let done_before = frames.len() as f64;
-            let expected = if params.lines > 0 {
-                params.bytes_per_line as usize * params.lines as usize
-            } else {
-                0
-            };
-            let mut data = Vec::with_capacity(expected);
-            loop {
-                if self.cancel.requested.load(Ordering::SeqCst) {
-                    return Err(Error::Sane {
-                        status: sane::STATUS_CANCELLED,
-                        message: "cancelled".into(),
-                    });
-                }
-                let n = self.sane.read(h, &mut buf)?;
-                if n == 0 {
-                    break;
-                }
-                data.extend_from_slice(&buf[..n]);
-                if last_report.elapsed().as_millis() >= 80 {
-                    last_report = Instant::now();
-                    let fraction = if expected > 0 {
-                        ((done_before + data.len() as f64 / expected as f64) / passes).min(1.0)
-                    } else {
-                        -1.0
-                    };
-                    let _ = out.send(Output::Event(ScanEvent::Progress { page, fraction }));
-                }
-            }
-            // certains backends terminent la trame (EOF) au lieu de signaler l'annulation
-            if self.cancel.requested.load(Ordering::SeqCst) {
-                return Err(Error::Sane {
-                    status: sane::STATUS_CANCELLED,
-                    message: "cancelled".into(),
-                });
-            }
-            let last = params.last_frame != 0;
-            frames.push(Frame { params, data });
-            if last {
-                break;
-            }
-        }
-        let _ = out.send(Output::Event(ScanEvent::Progress { page, fraction: 1.0 }));
-        assemble(&frames)
     }
 }
 

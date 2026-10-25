@@ -84,7 +84,7 @@
   }
 
   const commands = {
-    app_info: () => ({ version: "0.1.0-dev", lang: settings.language === "auto" ? lang : settings.language, settings, sane: true, sane_version: "1.2.1", save_dir: "/home/user/Documents", printing: true }),
+    app_info: () => ({ version: "0.1.0-dev", lang: settings.language === "auto" ? lang : settings.language, settings, sane: true, sane_version: "1.2.1", backend: "SANE", save_dir: "/home/user/Documents", printing: true }),
     save_settings: ({ settings: s }) => { settings = s; return commands.app_info(); },
     list_devices: async () => { await sleep(900); return settings.network_devices ? devices : devices.slice(1); },
     open_device: async ({ name }) => { await sleep(500); options = makeOptions(name); settings.last_device = name; preview = null; return options; },

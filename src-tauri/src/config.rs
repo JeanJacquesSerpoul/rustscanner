@@ -77,11 +77,19 @@ pub fn save_dir(settings: &Settings) -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// Locale du système (pour la langue automatique).
+/// Locale du système (pour la langue automatique) ; sous Windows, à défaut de
+/// variable d'environnement, la langue d'affichage de la session.
 pub fn system_locale() -> String {
-    ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"]
+    let env = ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"]
         .iter()
         .filter_map(|k| std::env::var(k).ok())
-        .find(|v| !v.is_empty() && v != "C" && v != "POSIX")
-        .unwrap_or_default()
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX");
+    #[cfg(windows)]
+    let env = env.or_else(|| {
+        // langue principale : les 10 bits de poids faible de l'identifiant
+        const LANG_FRENCH: u16 = 0x0c;
+        let lang = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff;
+        Some(if lang == LANG_FRENCH { "fr" } else { "en" }.to_string())
+    });
+    env.unwrap_or_default()
 }

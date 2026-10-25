@@ -7,10 +7,10 @@ pub use i18n::{Lang, set_lang};
 
 use serde::{Deserialize, Serialize};
 
-/// Scanner détecté par SANE.
+/// Scanner détecté par SANE (ou WIA sous Windows).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeviceInfo {
-    /// Nom SANE (`pixma:MG3600_192.168.1.102`, `escl:http://…`).
+    /// Nom SANE (`pixma:MG3600_192.168.1.102`, `escl:http://…`) ou WIA (`wia:{…}\0001`).
     pub name: String,
     pub vendor: String,
     pub model: String,
@@ -45,6 +45,7 @@ impl DeviceInfo {
             "net" => tr!("Réseau (saned)", "Network (saned)"),
             "v4l" => tr!("Caméra", "Camera"),
             "test" => tr!("Virtuel", "Virtual"),
+            "wia" => "Windows (WIA)",
             _ if self.name.contains("192.168.") || self.name.contains("://") => {
                 tr!("Réseau", "Network")
             }
@@ -381,9 +382,12 @@ pub struct AppInfo {
     pub version: String,
     pub lang: String,
     pub settings: Settings,
-    /// SANE est disponible sur le système.
+    /// Le backend des scanners (SANE, ou WIA sous Windows) est disponible.
     pub sane: bool,
     pub sane_version: String,
+    /// Nom du backend : « SANE » ou « WIA ».
+    #[serde(default)]
+    pub backend: String,
     /// Dossier d'enregistrement effectif.
     pub save_dir: String,
     pub printing: bool,

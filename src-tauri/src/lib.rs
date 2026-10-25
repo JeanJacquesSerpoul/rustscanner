@@ -1,14 +1,20 @@
-//! RustScanner — numérisation de documents (SANE), dans l'esprit de Skanpage.
+//! RustScanner — numérisation de documents (SANE, WIA sous Windows), dans l'esprit de Skanpage.
 
 pub mod commands;
 pub mod config;
 pub mod document;
 pub mod error;
 pub mod export;
+#[cfg(not(windows))]
 pub mod frames;
 pub mod gettext;
+#[cfg(not(windows))]
 pub mod sane;
 pub mod scanner;
+#[cfg(windows)]
+pub mod wia;
+#[cfg(windows)]
+pub mod winprint;
 
 use tauri::http::{Response, StatusCode, header};
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};

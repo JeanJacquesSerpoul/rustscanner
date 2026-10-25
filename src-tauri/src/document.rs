@@ -249,13 +249,36 @@ impl Drop for Document {
 }
 
 /// Dossier de travail de la session ; nettoie ceux des sessions terminées.
+/// Le processus `pid` (session d'une autre instance) est encore en cours.
+#[cfg(not(windows))]
+fn running(pid: &str) -> bool {
+    Path::new("/proc").join(pid).exists()
+}
+
+#[cfg(windows)]
+fn running(pid: &str) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    let Ok(pid) = pid.parse::<u32>() else { return false };
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return false };
+        let mut code = 0u32;
+        let alive = GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE.0 as u32;
+        let _ = CloseHandle(handle);
+        alive
+    }
+}
+
 pub fn session_dir() -> PathBuf {
-    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("rustscanner");
+    // sous Windows, le dossier de cache (%LOCALAPPDATA%\rustscanner) est aussi
+    // celui de l'installation : les sessions vont dans le dossier temporaire
+    let cache = if cfg!(windows) { None } else { dirs::cache_dir() };
+    let base = cache.unwrap_or_else(std::env::temp_dir).join("rustscanner");
     if let Ok(entries) = fs::read_dir(&base) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if let Some(pid) = name.strip_prefix("session-")
-                && !Path::new("/proc").join(pid).exists()
+                && !running(pid)
             {
                 let _ = fs::remove_dir_all(e.path());
             }

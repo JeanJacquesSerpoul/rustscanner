@@ -345,6 +345,8 @@ fn SettingsDialog() -> impl IntoView {
     let state = use_state();
     let draft = RwSignal::new(state.settings.get_untracked());
     let info = state.info.get_untracked();
+    // sous Windows (WIA), les scanners réseau s'ajoutent dans les paramètres du système
+    let wia = info.as_ref().is_some_and(|i| i.backend == "WIA");
     let default_dir = info.as_ref().map(|i| i.save_dir.clone()).unwrap_or_default();
     let dir_shown = {
         let default_dir = default_dir.clone();
@@ -442,11 +444,11 @@ fn SettingsDialog() -> impl IntoView {
                     </div>
 
                     <h4>{tr!("Scanners", "Scanners")}</h4>
-                    {toggle(
+                    {(!wia).then(|| toggle(
                         tr!("Rechercher les scanners réseau", "Look for network scanners"),
                         tr!("Wi-Fi et Ethernet (eSCL, AirScan, saned) ; la recherche est un peu plus longue.", "Wi-Fi and Ethernet (eSCL, AirScan, saned); searching takes a bit longer."),
                         |s| s.network_devices, |s, v| s.network_devices = v,
-                    )}
+                    ))}
                     {toggle(
                         tr!("Rouvrir le dernier scanner", "Reopen the last scanner"),
                         tr!("Connexion automatique au démarrage.", "Connect automatically at startup."),
@@ -460,8 +462,9 @@ fn SettingsDialog() -> impl IntoView {
                 </div>
                 <p class="about muted small">
                     {move || info.as_ref().map(|i| format!(
-                        "RustScanner {} · SANE {} · Rust, Tauri & Leptos",
+                        "RustScanner {} · {} {} · Rust, Tauri & Leptos",
                         i.version,
+                        if i.backend.is_empty() { "SANE" } else { i.backend.as_str() },
                         if i.sane { i.sane_version.clone() } else { "—".into() }
                     ))}
                 </p>

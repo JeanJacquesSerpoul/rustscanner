@@ -16,7 +16,7 @@ use crate::config::{self, DeviceOptions};
 use crate::document::{self, Document};
 use crate::error::{Error, Result};
 use crate::export::{self, Source};
-use crate::scanner::{Output, Scanner};
+use crate::scanner::{self, Output, Scanner};
 
 pub struct AppState {
     pub scanner: Scanner,
@@ -113,6 +113,7 @@ fn info(state: &AppState) -> AppInfo {
         settings,
         sane: state.scanner.available(),
         sane_version: state.scanner.version(),
+        backend: scanner::BACKEND.into(),
         printing: export::printing_available(),
     }
 }
@@ -436,11 +437,7 @@ pub async fn print_document(
 ) -> Result<String> {
     let srcs = sources(&state, &pages);
     let dir = state.doc.lock().unwrap().dir().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
-        let pdf = dir.join("print.pdf");
-        export::write_pdf(&srcs, &pdf, 90, &|_, _| {})?;
-        export::print(&pdf, &printer, copies)
-    })
+    tauri::async_runtime::spawn_blocking(move || export::print_pages(&srcs, &dir, &printer, copies))
     .await
     .map_err(|e| Error::Other(e.to_string()))?
 }

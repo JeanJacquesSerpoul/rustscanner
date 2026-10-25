@@ -3,9 +3,26 @@
 use rustscanner_shared::{tr, trf};
 use serde::Serialize;
 
+/// États au sens de SANE ; le backend WIA (Windows) y ramène aussi ses erreurs.
+pub const STATUS_CANCELLED: i32 = 2;
+pub const STATUS_NO_DOCS: i32 = 7;
+
+#[cfg(not(windows))]
+fn no_backend(detail: &str) -> String {
+    trf!("SANE est introuvable sur ce système ({detail})", "SANE is not available on this system ({detail})")
+}
+
+#[cfg(windows)]
+fn no_backend(detail: &str) -> String {
+    trf!(
+        "Le service d'acquisition d'images Windows (WIA) est indisponible ({detail})",
+        "The Windows Image Acquisition (WIA) service is not available ({detail})"
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{}", trf!("SANE est introuvable sur ce système ({0})", "SANE is not available on this system ({0})", .0))]
+    #[error("{}", no_backend(.0))]
     NoSane(String),
     #[error("{message}")]
     Sane { status: i32, message: String },
@@ -24,12 +41,19 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn cancelled() -> Error {
+        Error::Sane {
+            status: STATUS_CANCELLED,
+            message: "cancelled".into(),
+        }
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Error::NoSane(_) => "no-sane",
             Error::Sane { status, .. } => match *status {
-                crate::sane::STATUS_CANCELLED => "cancelled",
-                crate::sane::STATUS_NO_DOCS => "no-docs",
+                STATUS_CANCELLED => "cancelled",
+                STATUS_NO_DOCS => "no-docs",
                 3 => "busy",
                 6 => "jammed",
                 8 => "cover-open",
