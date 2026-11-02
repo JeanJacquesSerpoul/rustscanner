@@ -142,7 +142,14 @@ unsafe fn cstr(p: *const c_char) -> String {
 
 impl Sane {
     pub fn load() -> Result<Sane> {
-        let candidates = ["libsane.so.1", "libsane.so", "libsane.1.dylib", "libsane.dylib"];
+        // Homebrew sur Apple Silicon installe dans /opt/homebrew, hors des chemins de dlopen
+        let candidates = [
+            "libsane.so.1",
+            "libsane.so",
+            "libsane.1.dylib",
+            "libsane.dylib",
+            "/opt/homebrew/lib/libsane.1.dylib",
+        ];
         let mut last = String::new();
         for name in candidates {
             match unsafe { Library::new(name) } {

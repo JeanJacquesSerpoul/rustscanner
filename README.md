@@ -129,6 +129,12 @@ cargo tauri build --bundles deb
 
 Le paquet est produit dans `target/release/bundle/deb/` (sous Windows : voir ci-dessus).
 
+### Intégration continue
+
+Le workflow `.github/workflows/build.yml` construit l'application sous Linux (`.deb`, AppImage), Windows (installeurs NSIS et MSI, `rustscanner.exe`) et macOS (`.dmg` universel, Apple Silicon et Intel) à chaque poussée sur `main` et chaque pull request ; les fichiers sont à télécharger dans l'onglet *Actions*. Pousser une étiquette `v*` (par exemple `v0.1.0`) crée en plus un brouillon de version GitHub avec tous les installeurs.
+
+L'application macOS n'est pas signée : au premier lancement, ouvrez-la par clic droit › *Ouvrir*, ou retirez la quarantaine avec `xattr -dr com.apple.quarantine /Applications/RustScanner.app`. Elle utilise SANE, à installer avec Homebrew (`brew install sane-backends`).
+
 ### Travailler l'interface dans un navigateur
 
 `trunk serve` sert l'interface sur http://localhost:1420 ; hors de Tauri, `frontend/devshim.js` simule le cœur (scanners, numérisation, pages) pour itérer sur l'interface sans scanner.
