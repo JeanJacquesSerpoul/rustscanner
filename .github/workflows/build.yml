@@ -68,6 +68,14 @@ jobs:
       - name: Construction
         run: cargo tauri build ${{ matrix.args }}
 
+      - name: Vérification du bundle (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=target/universal-apple-darwin/release/bundle/macos/RustScanner.app
+          plutil -p "$app/Contents/Info.plist" | grep -A1 NSLocalNetworkUsageDescription
+          test -f "$app/Contents/Resources/fr.lproj/InfoPlist.strings"
+          codesign --verify --deep --strict "$app"
+
       - uses: actions/upload-artifact@v4
         with:
           name: rustscanner-${{ matrix.name }}

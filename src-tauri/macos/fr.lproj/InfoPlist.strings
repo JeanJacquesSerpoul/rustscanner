@@ -1,0 +1,1 @@
+NSLocalNetworkUsageDescription = "RustScanner recherche les scanners sur votre réseau local (eSCL, AirScan, saned).";
